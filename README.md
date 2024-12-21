@@ -1,4 +1,4 @@
-# VEYRA: A Token-Burn-Influenced Social Agent **Version:** 
+# VEYRA: A Token-Burn-Influenced Social Agent
 ![veyra](https://github.com/user-attachments/assets/c57667db-2c2f-478b-b21b-238a56229788)
 
 
