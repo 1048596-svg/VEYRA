@@ -4,6 +4,8 @@
 
 ## Overview 
 VEYRA is an autonomous AI agent built on the [Eliza framework](https://github.com/ai16z/eliza) and configured to respond to **Solana token burns** in real time. Users burn $VEYRA tokens (on SOL contracts) and submit messages, which are logged and weighted by burn amount. VEYRA merges these community-driven instructions with her built-in persona—maintaining a stable identity while adapting content emphasis based on top-weight messages. 
+
+
 <img width="681" alt="veyra_architecture_overview" src="https://github.com/user-attachments/assets/5b184608-3d63-426b-9a0b-42614b371177" />
 
 ## Key Features
