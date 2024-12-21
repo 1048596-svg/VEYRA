@@ -1,0 +1,476 @@
+import React, { useState, useEffect, useContext } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Connection,
+  PublicKey,
+  clusterApiUrl,
+  SendTransactionError,
+  Transaction,
+} from '@solana/web3.js';
+import { Program, AnchorProvider, web3, BN } from '@project-serum/anchor';
+import {
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
+import { Buffer } from 'buffer';
+import { Brain } from 'lucide-react';
+import './HowitWorks.css';
+
+import idl from '../../global_message_storage.json';
+import { WalletContext } from '../../WalletContext';
+
+import img from './face.jpg';
+
+// **Define Token Decimals**
+const DECIMALS = 9;
+
+// **Program and Token IDs**
+const PROGRAM_ID = new PublicKey(''); // Updated Program ID
+const VEYRA_MINT_ADDRESS = new PublicKey(''); // Updated Mint Address
+
+const network = clusterApiUrl('devnet');
+const opts = {
+  preflightCommitment: 'processed',
+  commitment: 'processed',
+};
+
+const connection = new Connection(network, opts.preflightCommitment);
+
+/**
+ * BurnSummary Component
+ * Displays the steps on how VEYRA learns through burning tokens.
+ */
+const BurnSummary = () => (
+  <div className="burn-summary-box">
+    <div className="burn-summary-header">
+      <Brain className="summary-icon" size={24} />
+      <h3>HOW VEYRA LEARNS</h3>
+    </div>
+    <div className="burn-summary-steps">
+      <div className="summary-step">
+        <div className="step-number">01</div>
+        <div className="step-content">
+          <h4>Choose Your Impact</h4>
+          <p>Burn $VEYRA tokens - higher amounts have more influence on VEYRA's personality and memory</p>
+        </div>
+      </div>
+      <div className="step-divider" />
+      <div className="summary-step">
+        <div className="step-number">02</div>
+        <div className="step-content">
+          <h4>Inscribe Message</h4>
+          <p>Your message is permanently encoded into VEYRA's memory through the burn transaction</p>
+        </div>
+      </div>
+      <div className="step-divider" />
+      <div className="summary-step">
+        <div className="step-number">03</div>
+        <div className="step-content">
+          <h4>Network Integration</h4>
+          <p>Messages are added from the burn transaction to train VEYRA's responses and personality</p>
+        </div>
+      </div>
+      <div className="step-divider" />
+      <div className="summary-step">
+        <div className="step-number">04</div>
+        <div className="step-content">
+          <h4>Network Evolution</h4>
+          <p>Burned tokens permanently shape VEYRA based on message weight and summary</p>
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+/**
+ * HowItWorks Component
+ * Main component handling the burn functionality and displaying relevant UI.
+ */
+const HowItWorks = () => {
+  // **State Variables**
+  const [burnAmount, setBurnAmount] = useState('');
+  const [message, setMessage] = useState('');
+  const [isGlitching, setIsGlitching] = useState(false);
+  const [error, setError] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [balance, setBalance] = useState(null); // Initialize as null for loading state
+  const [influence, setInfluence] = useState(null); // Initialize as null for loading state
+
+  // **Context Variables**
+  const { provider, walletKey } = useContext(WalletContext);
+
+  // **Program and PDA States**
+  const [program, setProgram] = useState(null);
+  const [messageStorePDA, setMessageStorePDA] = useState(null);
+
+  /**
+   * useEffect Hook
+   * Initializes the Anchor program and fetches initial data.
+   */
+  useEffect(() => {
+    let isMounted = true;
+
+    const setupProgram = async () => {
+      if (!provider || !walletKey) return;
+
+      try {
+        // **Initialize Anchor Provider**
+        const anchorProvider = new AnchorProvider(connection, provider, opts);
+        window.Buffer = Buffer;
+
+        // **Initialize Program**
+        const prog = new Program(idl, PROGRAM_ID, anchorProvider);
+        if (isMounted) setProgram(prog);
+
+        // **Find Program Derived Address (PDA)**
+        const [pda] = await PublicKey.findProgramAddress(
+          [Buffer.from('message-store')],
+          PROGRAM_ID
+        );
+        if (isMounted) setMessageStorePDA(pda);
+
+        // **Initialize Message Store if Needed**
+        await initializeMessageStoreIfNeeded(anchorProvider, prog, pda);
+
+        // **Fetch Initial Balance and Influence**
+        await fetchBalanceAndInfluence(anchorProvider, prog, walletKey);
+      } catch (err) {
+        console.error('Setup failed:', err);
+        setError('Failed to initialize: ' + err.message);
+      }
+    };
+
+    setupProgram();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [provider, walletKey]);
+
+  /**
+   * initializeMessageStoreIfNeeded
+   * Initializes the message store PDA if it doesn't exist.
+   */
+  const initializeMessageStoreIfNeeded = async (anchorProvider, prog, pda) => {
+    try {
+      const accountInfo = await connection.getAccountInfo(pda);
+      if (!accountInfo) {
+        const tx = await prog.methods
+          .initializeMessageStore()
+          .accounts({
+            messageStore: pda,
+            authority: anchorProvider.wallet.publicKey,
+            systemProgram: web3.SystemProgram.programId,
+          })
+          .transaction();
+
+        const { blockhash } = await connection.getLatestBlockhash('processed');
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = anchorProvider.wallet.publicKey;
+
+        const signature = await anchorProvider.sendAndConfirm(tx);
+      }
+    } catch (err) {
+      console.error('Failed to initialize message store:', err);
+      throw err;
+    }
+  };
+
+  /**
+   * createATA
+   * Creates an Associated Token Account (ATA) if it doesn't exist.
+   */
+  const createATA = async (anchorProvider) => {
+    try {
+      const owner = anchorProvider.wallet.publicKey;
+
+      // **Get ATA Address**
+      const ata = await getAssociatedTokenAddress(
+        VEYRA_MINT_ADDRESS,
+        owner,
+        false,
+        TOKEN_PROGRAM_ID, 
+        ASSOCIATED_TOKEN_PROGRAM_ID 
+      );
+
+      const account = await connection.getAccountInfo(ata);
+
+      // **Create ATA if It Doesn't Exist**
+      if (!account) {
+        const instruction = createAssociatedTokenAccountInstruction(
+          owner,
+          ata,
+          owner,
+          VEYRA_MINT_ADDRESS,
+          TOKEN_PROGRAM_ID, 
+          ASSOCIATED_TOKEN_PROGRAM_ID 
+        );
+
+        const transaction = new Transaction().add(instruction);
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = owner;
+
+        const signature = await anchorProvider.sendAndConfirm(transaction);
+      }
+
+      return ata;
+    } catch (err) {
+      console.error('ATA Creation error:', err);
+      if (err instanceof SendTransactionError && err.logs) {
+        console.error('Transaction logs:', err.logs);
+      }
+      throw err;
+    }
+  };
+
+  /**
+   * fetchBalanceAndInfluence
+   * Fetches the token balance and user influence from the smart contract.
+   */
+  const fetchBalanceAndInfluence = async (anchorProvider, prog, walletKey) => {
+    try {
+      const ata = await createATA(anchorProvider);
+      const tokenAccountInfo = await connection.getParsedAccountInfo(ata);
+
+      setBalance(
+        tokenAccountInfo.value
+          ? tokenAccountInfo.value.data.parsed.info.tokenAmount.uiAmount
+          : 0
+      );
+
+      if (messageStorePDA && prog) {
+        const messageStore = await prog.account.globalMessageStore.fetch(messageStorePDA);
+        const userInfluence = messageStore.messages.filter(
+          (msg) => msg.sender.toBase58() === walletKey
+        ).length;
+        setInfluence(userInfluence);
+      }
+    } catch (err) {
+      console.error('Failed to fetch balance and influence:', err);
+      setBalance(0);
+      setInfluence(0);
+    }
+  };
+
+  /**
+   * executeBurn
+   * Handles the burn and message storage functionality.
+   */
+  const executeBurn = async () => {
+    if (!provider || !walletKey) {
+      setError('Please connect your wallet first');
+      return;
+    }
+
+    if (!burnAmount || parseInt(burnAmount) < 10000) {
+      setError('Minimum burn amount is 10000 tokens');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setError(null);
+      setIsGlitching(true);
+
+      const anchorProvider = new AnchorProvider(connection, provider, opts);
+
+      if (!program || !messageStorePDA) {
+        throw new Error('Program not initialized');
+      }
+
+      const ataAddress = await createATA(anchorProvider);
+
+      // **Convert Burn Amount from Tokens to Smallest Units**
+      const burnAmountTokens = parseInt(burnAmount);
+      const burnAmountUnits = new BN(burnAmountTokens).mul(new BN(10).pow(new BN(DECIMALS)));
+
+      // **Create Transaction to Burn Tokens and Store Message**
+      const tx = await program.methods
+        .burnAndStoreMessage(burnAmountUnits, message)
+        .accounts({
+          messageStore: messageStorePDA,
+          mint: VEYRA_MINT_ADDRESS,
+          tokenAccount: ataAddress,
+          authority: anchorProvider.wallet.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID, // Standard SPL Token Program ID
+          systemProgram: web3.SystemProgram.programId,
+        })
+        .transaction();
+
+      // **Set Recent Blockhash and Fee Payer**
+      const { blockhash } = await connection.getLatestBlockhash('processed');
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = anchorProvider.wallet.publicKey;
+
+      // **Send and Confirm Transaction**
+      const signature = await anchorProvider.sendAndConfirm(tx);
+
+      // **Fetch Updated Balance and Influence**
+      await fetchBalanceAndInfluence(anchorProvider, program, walletKey);
+
+      // **Reset State Variables**
+      setIsProcessing(false);
+      setIsGlitching(false);
+      setBurnAmount('');
+      setMessage('');
+    } catch (err) {
+      console.error('Burn failed:', err);
+      if (err instanceof SendTransactionError && err.logs) {
+        console.error('Transaction logs:', err.logs);
+        setError('Burn transaction failed. Check console for logs.');
+      } else {
+        setError(err.message);
+      }
+      setIsProcessing(false);
+      setIsGlitching(false);
+    }
+  };
+
+  /**
+   * formatUnits
+   * Utility function to format amounts from smallest units to tokens.
+   */
+  const formatUnits = (amount, decimals) => {
+    const bnAmount = new BN(amount);
+    const divisor = new BN(10).pow(new BN(decimals));
+    const whole = bnAmount.div(divisor).toString();
+    const fraction = bnAmount.mod(divisor).toString().padStart(decimals, '0').replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : whole;
+  };
+
+  return (
+    <section className="how-section">
+      <div className="how-grid-background" />
+      <div className="how-content-wrapper">
+        <div className="how-title-section">
+          <pre className="how-title-ascii">
+            {`
+██████╗ ██╗   ██╗██████╗ ███╗   ██╗    ███╗   ███╗███████╗ ██████╗██╗  ██╗ █████╗ ███╗   ██╗██╗ ██████╗
+██╔══██╗██║   ██║██╔══██╗████╗  ██║    ████╗ ████║██╔════╝██╔════╝██║  ██║██╔══██╗████╗  ██║██║██╔════╝
+██████╔╝██║   ██║██████╔╝██╔██╗ ██║    ██╔████╔██║█████╗  ██║     ███████║███████║██╔██╗ ██║██║██║     
+██╔══██╗██║   ██║██╔══██╗██║╚██╗██║    ██║╚██╔╝██║██╔══╝  ██║     ██╔══██║██╔══██║██║╚██╗██║██║██║     
+██████╔╝╚██████╔╝██║  ██║██║ ╚████║    ██║ ╚═╝ ██║███████╗╚██████╗██║  ██║██║  ██║██║ ╚████║██║╚██████╗
+╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝    ╚═╝     ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝ ╚═════╝
+`}
+          </pre>
+          <div className="how-subtitle">TRAINING PROTOCOL</div>
+        </div>
+
+        {/* **Burn Summary Section** */}
+        <BurnSummary />
+
+        {/* **Error Message Display** */}
+        {error && (
+          <div className="error-message">
+            <span>{error}</span>
+          </div>
+        )}
+         <div className="how-subtitle2">TRAIN VEYRA NOW</div>
+        {/* **Burn Interface Container** */}
+        <div className="burn-interface-container">
+          <div className={`burn-box ${isGlitching ? 'glitching' : ''}`}>
+            {/* **Burn Box Header: Balance and Influence** */}
+            <div className="burn-box-header">
+              <div className="available-balance">
+                <img
+                  src={img}
+                  className="token-icon"
+                  alt="VEYRA"
+                />
+                <span>VEYRA AVAILABLE:</span>
+                <span className="balance-amount">
+                  {balance !== null ? balance:'LOADING...'}
+                </span>
+              </div>
+              <div className="wallet-address">
+                <span className="address-text">
+                  {walletKey
+                    ? `${walletKey.slice(0, 4)}...${walletKey.slice(-4)}`
+                    : '0x0000...0000'}
+                </span>
+                <span className="credits-amount">
+                </span>
+              </div>
+            </div>
+
+            {/* **Burn Amount Input Section** */}
+            <div className="input-section">
+              <label>$VEYRA to Burn</label>
+              <div className="amount-input-container">
+                <img
+                  src={img}
+                  className="token-icon-small"
+                  alt="VEYRA"
+                />
+                <input
+                  type="text"
+                  value={burnAmount}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Allow only digits
+                    if (/^\d*$/.test(value)) {
+                      setBurnAmount(value);
+                    }
+                  }}
+                  placeholder="0"
+                  disabled={isProcessing}
+                />
+                <button
+                className="max-button"
+                onClick={() => setBurnAmount(balance !== null ? Math.floor(balance).toString() : '0')}
+                disabled={isProcessing || balance === null || balance === 0}
+              >
+                MAX
+              </button>
+              </div>
+            </div>
+
+            {/* **Message Input Section** */}
+            <div className="input-section">
+              <label>Message for VEYRA</label>
+              <textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="What would you like VEYRA to remember..."
+                disabled={isProcessing}
+              />
+            </div>
+
+            {/* **Burn Button** */}
+            <button
+              className="burn-button"
+              onClick={executeBurn}
+              disabled={isProcessing}
+            >
+              {isProcessing ? 'PROCESSING...' : 'BURN & INFLUENCE'}
+            </button>
+
+            {/* **Footer Information** */}
+            <div className="footer-info">
+              <div className="info-item">
+                <div className="info-dot" />
+                <span>
+                  BURN $VEYRA TOKENS TO GAIN INFLUENCE OVER VEYRA'S RESPONSES
+                </span>
+              </div>
+              <div className="info-item">
+                <div className="info-dot" />
+                <span>HIGHER BURNS GRANT MORE WEIGHT TO YOUR MESSAGES</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="view-burns-box">
+              <Link to="/VeyraMind" className="view-burns-link">
+                Click here to view all burns and messages fed to VEYRA's  network 
+              </Link>
+            </div>
+    </section>
+  );
+};
+
+export default HowItWorks;
